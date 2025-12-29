@@ -1,69 +1,72 @@
-// services/email.js - Email service for Railway
-const nodemailer = require('nodemailer');
+// services/email.js - Email service using Resend
+const https = require('https');
 
-// Create transporter immediately on load
-let transporter = null;
-
-// Check environment and create transporter
-const smtpHost = process.env.SMTP_HOST;
-const smtpUser = process.env.SMTP_USER;
-const smtpPass = process.env.SMTP_PASS;
+const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_6bZUEwwQ_4Bi9JKenq8sN4cYJy9btUKaP';
+const FROM_EMAIL = 'Bubblebee Cleaning <onboarding@resend.dev>'; // Use your domain after verifying in Resend
 
 console.log('');
-console.log('📧 EMAIL SERVICE INIT');
-console.log(`   SMTP_HOST: ${smtpHost ? '✅ Set' : '❌ Missing'}`);
-console.log(`   SMTP_USER: ${smtpUser ? '✅ Set (' + smtpUser + ')' : '❌ Missing'}`);
-console.log(`   SMTP_PASS: ${smtpPass ? '✅ Set (hidden)' : '❌ Missing'}`);
+console.log('📧 EMAIL SERVICE INIT (Resend)');
+console.log(`   API Key: ${RESEND_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log('');
 
-if (smtpHost && smtpUser && smtpPass) {
-    transporter = nodemailer.createTransport({
-        service: 'gmail',
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false,
-        auth: {
-            user: smtpUser,
-            pass: smtpPass
-        },
-        tls: {
-            rejectUnauthorized: false
-        }
+function sendEmailViaResend(to, subject, html, text) {
+    return new Promise((resolve, reject) => {
+        const data = JSON.stringify({
+            from: FROM_EMAIL,
+            to: [to],
+            subject: subject,
+            html: html,
+            text: text
+        });
+
+        const options = {
+            hostname: 'api.resend.com',
+            port: 443,
+            path: '/emails',
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    console.log(`✅ EMAIL SENT to ${to}`);
+                    resolve({ sent: true, response: JSON.parse(body) });
+                } else {
+                    console.error(`❌ EMAIL FAILED to ${to}: ${body}`);
+                    reject(new Error(body));
+                }
+            });
+        });
+
+        req.on('error', (e) => {
+            console.error(`❌ EMAIL ERROR: ${e.message}`);
+            reject(e);
+        });
+
+        req.write(data);
+        req.end();
     });
-    console.log('   ✅ Transporter created');
-} else {
-    console.log('   ❌ Email NOT configured - missing environment variables');
 }
-console.log('');
 
 async function sendEmail({ to, subject, text, html }) {
-    if (!transporter) {
-        console.log(`📧 EMAIL SKIPPED (not configured): To: ${to}, Subject: ${subject}`);
-        return { sent: false, reason: 'not configured' };
-    }
-    
     try {
-        const result = await transporter.sendMail({
-            from: `Bubblebee Cleaning <${smtpUser}>`,
-            to,
-            subject,
-            text,
-            html
-        });
-        console.log(`✅ EMAIL SENT to ${to} - Subject: ${subject}`);
-        return { sent: true, messageId: result.messageId };
+        return await sendEmailViaResend(to, subject, html, text);
     } catch (error) {
-        console.error(`❌ EMAIL FAILED to ${to}: ${error.message}`);
+        console.error(`❌ sendEmail failed: ${error.message}`);
         return { sent: false, error: error.message };
     }
 }
 
 // Booking confirmation for CUSTOMER
 async function sendBookingConfirmation(data) {
-    const result = await sendEmail({
-        to: data.email,
-        subject: `✅ Booking Confirmed - ${data.date}`,
-        text: `Hi ${data.customerName}, Your cleaning has been confirmed! Service: ${data.service}, Date: ${data.date}, Time: ${data.time}, Address: ${data.address}, Total: $${data.total}. We'll see you soon! - Bubblebee Cleaning (863) 296-7215`,
-        html: `
+    const html = `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -85,24 +88,28 @@ async function sendBookingConfirmation(data) {
         <p><strong>The Bubblebee Cleaning Team</strong><br>📞 (863) 296-7215<br>📧 bubbleb.cleaningservice@gmail.com</p>
     </div>
 </body>
-</html>`
+</html>`;
+
+    const text = `Hi ${data.customerName}, Your cleaning has been confirmed! Service: ${data.service}, Date: ${data.date}, Time: ${data.time}, Address: ${data.address}, Total: $${data.total}. We'll see you soon! - Bubblebee Cleaning (863) 296-7215`;
+
+    const result = await sendEmail({
+        to: data.email,
+        subject: `✅ Booking Confirmed - ${data.date}`,
+        html,
+        text
     });
-    
-    // Also send notification to business
+
+    // Also send to business
     await sendBusinessNotification(data);
-    
+
     return result;
 }
 
 // Notification to BUSINESS OWNER
 async function sendBusinessNotification(data) {
-    const businessEmail = process.env.COMPANY_EMAIL || 'bubbleb.cleaningservice@gmail.com';
-    
-    return await sendEmail({
-        to: businessEmail,
-        subject: `🆕 NEW BOOKING - ${data.customerName} - ${data.date}`,
-        text: `NEW BOOKING! Customer: ${data.customerName}, Email: ${data.email}, Phone: ${data.phone || 'N/A'}, Service: ${data.service}, Date: ${data.date}, Time: ${data.time}, Address: ${data.address}, Quote: $${data.total}`,
-        html: `
+    const businessEmail = 'bubbleb.cleaningservice@gmail.com';
+
+    const html = `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -127,7 +134,15 @@ async function sendBusinessNotification(data) {
         </div>
     </div>
 </body>
-</html>`
+</html>`;
+
+    const text = `NEW BOOKING! Customer: ${data.customerName}, Email: ${data.email}, Phone: ${data.phone || 'N/A'}, Service: ${data.service}, Date: ${data.date}, Time: ${data.time}, Address: ${data.address}, Quote: $${data.total}`;
+
+    return await sendEmail({
+        to: businessEmail,
+        subject: `🆕 NEW BOOKING - ${data.customerName} - ${data.date}`,
+        html,
+        text
     });
 }
 
@@ -135,7 +150,7 @@ async function sendBookingReminder(data) {
     return await sendEmail({
         to: data.email,
         subject: `⏰ Reminder: Cleaning Tomorrow at ${data.time}`,
-        text: `Hi ${data.customerName}, Reminder: Your cleaning is tomorrow! Date: ${data.date}, Time: ${data.time}, Address: ${data.address}. See you then! - Bubblebee Cleaning`,
+        text: `Hi ${data.customerName}, Reminder: Your cleaning is tomorrow! Time: ${data.time}, Address: ${data.address}. See you then! - Bubblebee Cleaning`,
         html: `<p>Hi ${data.customerName},</p><p>Reminder: Your cleaning is <strong>tomorrow</strong>!</p><p>Time: ${data.time}<br>Address: ${data.address}</p><p>See you then!<br>🐝 Bubblebee Cleaning</p>`
     });
 }
@@ -153,7 +168,7 @@ async function sendWelcome(data) {
     return await sendEmail({
         to: data.email,
         subject: `🎉 Welcome to Bubblebee Cleaning!`,
-        text: `Hi ${data.customerName}, Welcome to Bubblebee Cleaning! We're thrilled to have you. Questions? Call us at (863) 296-7215. - The Bubblebee Team`,
+        text: `Hi ${data.customerName}, Welcome to Bubblebee Cleaning! We're thrilled to have you. Call us at (863) 296-7215. - The Bubblebee Team`,
         html: `<p>Hi ${data.customerName},</p><p>Welcome to Bubblebee Cleaning! 🐝</p><p>We're thrilled to have you.</p><p>Questions? Call us at (863) 296-7215</p><p>- The Bubblebee Team</p>`
     });
 }
@@ -163,20 +178,4 @@ async function sendTestEmail(to) {
         to,
         subject: '🐝 Bubblebee Test Email',
         text: 'If you received this, email is working!',
-        html: '<h1>✅ Email Working!</h1><p>Your Bubblebee email is configured correctly. 🐝</p>'
-    });
-}
-
-function initTransporter() {
-    return transporter;
-}
-
-module.exports = {
-    sendEmail,
-    sendBookingConfirmation,
-    sendBookingReminder,
-    sendInvoice,
-    sendWelcome,
-    sendTestEmail,
-    initTransporter
-};
+        html: '<h1>✅ Email Working!</h1><p>Your Bubblebe
