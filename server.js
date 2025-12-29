@@ -489,6 +489,7 @@ app.post('/api/bookings', async (req, res) => {
             scheduled_date: data.scheduledDate,
             scheduled_time: data.scheduledTime,
             address: data.address || customer.address,
+            base_price: totalPrice,
             total_price: totalPrice,
             status: 'pending',
             frequency: data.frequency || 'once',
