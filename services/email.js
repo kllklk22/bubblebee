@@ -178,4 +178,20 @@ async function sendTestEmail(to) {
         to,
         subject: '🐝 Bubblebee Test Email',
         text: 'If you received this, email is working!',
-        html: '<h1>✅ Email Working!</h1><p>Your Bubblebe
+        html: '<h1>✅ Email Working!</h1><p>Your Bubblebee email is configured correctly. 🐝</p>'
+    });
+}
+
+function initTransporter() {
+    return true;
+}
+
+module.exports = {
+    sendEmail,
+    sendBookingConfirmation,
+    sendBookingReminder,
+    sendInvoice,
+    sendWelcome,
+    sendTestEmail,
+    initTransporter
+};
