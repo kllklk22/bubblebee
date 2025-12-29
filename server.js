@@ -59,7 +59,8 @@ function broadcast(event, data) {
 // ══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE
 // ══════════════════════════════════════════════════════════════════════════════
-
+// Trust proxy for Railway
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({
