@@ -45,7 +45,7 @@ async function sendEmail({ to, subject, text, html }) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                from: 'Bubblebee Cleaning <onboarding@resend.dev>',
+                from: 'Bubblebee Cleaning <bookings@bubblebee.co>',
                 to: to,
                 subject: subject,
                 text: text,
