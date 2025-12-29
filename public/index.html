@@ -960,6 +960,78 @@
             color: var(--charcoal);
         }
 
+        /* Mobile Menu - HIDDEN on desktop, only shows on mobile via media query */
+        .mobile-menu {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: white;
+            z-index: 9999;
+            padding: 80px 24px 24px;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .mobile-menu.active { display: flex; }
+        .mobile-menu-close {
+            position: absolute;
+            top: 16px;
+            right: 20px;
+            background: none;
+            border: none;
+            font-size: 36px;
+            cursor: pointer;
+            color: var(--charcoal);
+        }
+        .mobile-menu a {
+            display: block;
+            padding: 16px 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--charcoal);
+            text-decoration: none;
+            border-bottom: 1px solid #eee;
+        }
+        .mobile-menu .mobile-cta {
+            margin-top: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .mobile-menu .mobile-cta .btn {
+            text-align: center;
+            justify-content: center;
+        }
+
+        /* Mobile Bottom Bar - HIDDEN on desktop, only shows on mobile via media query */
+        .mobile-bottom-bar {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            padding: 12px 16px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            z-index: 998;
+        }
+        .mobile-bottom-bar .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .mobile-bottom-bar .btn {
+            padding: 14px 16px;
+            font-size: 14px;
+            justify-content: center;
+        }
+        .btn-call {
+            background: var(--sage);
+            color: white;
+        }
+
         /* Responsive */
         @media (max-width: 1024px) {
             .hero-content { grid-template-columns: 1fr; }
@@ -974,14 +1046,49 @@
             .footer-grid { grid-template-columns: 1fr 1fr; }
         }
         @media (max-width: 768px) {
+            body { padding-bottom: 76px; }
             .nav-links { display: none; }
             .mobile-menu-btn { display: block; }
-            .hero-stats { flex-direction: column; gap: 24px; }
+            .mobile-bottom-bar { display: block; }
+            
+            .hero { min-height: auto; padding: 100px 0 60px; }
+            .hero-text h1 { font-size: 32px; }
+            .hero-text p { font-size: 16px; }
+            .hero-image { height: 250px; font-size: 80px; }
+            .hero-stats { flex-direction: row; flex-wrap: wrap; gap: 20px; justify-content: center; }
+            .stat-item { text-align: center; }
+            .stat-item h3 { font-size: 28px; }
+            
+            section { padding: 60px 0; }
+            .section-header { margin-bottom: 40px; }
+            .section-header h2 { font-size: 28px; }
+            
+            .calc-form { padding: 20px; }
+            .calc-form h3 { font-size: 18px; }
+            .calc-result { padding: 24px; }
+            .quote-price { font-size: 48px; }
+            
             .services-grid { grid-template-columns: 1fr; }
+            .service-card { padding: 24px; }
+            
             .packages-grid { grid-template-columns: 1fr; }
+            .package-card { padding: 20px; }
+            
             .calc-extras { grid-template-columns: 1fr; }
+            .extra-item { padding: 14px; }
+            
             .slots-grid { grid-template-columns: repeat(2, 1fr); }
-            .footer-grid { grid-template-columns: 1fr; gap: 40px; }
+            
+            .testimonial-card { padding: 24px; }
+            
+            .calendar-widget { padding: 20px; }
+            .booking-summary { padding: 20px; }
+            
+            .zip-input-group { flex-direction: column; }
+            .zip-input-group .btn { width: 100%; }
+            
+            .footer-grid { grid-template-columns: 1fr; gap: 32px; text-align: center; }
+            .footer-social { justify-content: center; }
             .footer-bottom { flex-direction: column; gap: 12px; text-align: center; }
         }
 
@@ -1011,9 +1118,23 @@
                 <li><a href="#testimonials">Reviews</a></li>
                 <li><a href="#booking" class="btn btn-primary">Book Now</a></li>
             </ul>
-            <button class="mobile-menu-btn">&#9776;</button>
+            <button class="mobile-menu-btn" onclick="openMobileMenu()">&#9776;</button>
         </div>
     </nav>
+
+    <!-- Mobile Menu (only visible on mobile when opened) -->
+    <div class="mobile-menu" id="mobileMenu">
+        <button class="mobile-menu-close" onclick="closeMobileMenu()">&times;</button>
+        <a href="#calculator" onclick="closeMobileMenu()">Get Quote</a>
+        <a href="#services" onclick="closeMobileMenu()">Services</a>
+        <a href="#packages" onclick="closeMobileMenu()">Packages</a>
+        <a href="#testimonials" onclick="closeMobileMenu()">Reviews</a>
+        <a href="#booking" onclick="closeMobileMenu()">Book Now</a>
+        <div class="mobile-cta">
+            <a href="tel:8632967215" class="btn btn-call">📞 (863) 296-7215</a>
+            <a href="#booking" class="btn btn-primary" onclick="closeMobileMenu()">Book Online</a>
+        </div>
+    </div>
 
     <!-- Hero Section -->
     <section class="hero">
@@ -1546,14 +1667,14 @@
                     <ul>
                         <li><a href="#">About Us</a></li>
                         <li><a href="#testimonials">Reviews</a></li>
-                        <li><a href="mailto:bubbleb.cleaningservice@gmail.com">Careers</a></li>
+                        <li><a href="/cdn-cgi/l/email-protection#4d2f382f2f21282f632e21282c2324232a3e283f3b242e280d2a202c2421632e2220">Careers</a></li>
                     </ul>
                 </div>
                 <div class="footer-column">
                     <h4>Contact</h4>
                     <ul>
                         <li><a href="tel:8632967215">(863) 296-7215</a></li>
-                        <li><a href="mailto:bubbleb.cleaningservice@gmail.com">bubbleb.cleaningservice@gmail.com</a></li>
+                        <li><a href="/cdn-cgi/l/email-protection#41233423232d24236f222d24202f282f263224333728222401262c20282d6f222e2c"><span class="__cf_email__" data-cfemail="86e4f3e4e4eae3e4a8e5eae3e7e8efe8e1f5e3f4f0efe5e3c6e1ebe7efeaa8e5e9eb">[email&#160;protected]</span></a></li>
                         <li><a href="#service-area">Polk County, FL</a></li>
                     </ul>
                 </div>
@@ -1565,7 +1686,7 @@
         </div>
     </footer>
 
-    <script>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
         // Configuration
         const CONFIG = {
             apiUrl: '/api',
@@ -1797,11 +1918,6 @@
             document.getElementById('calendarDays').innerHTML = html;
         }
 
-        function changeCalendarMonth(delta) {
-            bookingState.calendarDate.setMonth(bookingState.calendarDate.getMonth() + delta);
-            renderCalendar();
-        }
-
         function selectDate(dateStr, disabled) {
             if (disabled) return;
             
@@ -1811,6 +1927,11 @@
             renderCalendar();
             showTimeSlots(dateStr);
             updateBookingSummary();
+        }
+
+        function changeCalendarMonth(delta) {
+            bookingState.calendarDate.setMonth(bookingState.calendarDate.getMonth() + delta);
+            renderCalendar();
         }
 
         function showTimeSlots(dateStr) {
@@ -2004,6 +2125,24 @@
 
         console.log('%cBubblebee Cleaning', 'font-size:20px;font-weight:bold;color:#F5A623;');
         console.log('%c   Serving Polk County, FL', 'font-size:12px;color:#7CB69A;font-style:italic;');
+
+        // Mobile Menu Functions
+        function openMobileMenu() {
+            document.getElementById('mobileMenu').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+        function closeMobileMenu() {
+            document.getElementById('mobileMenu').classList.remove('active');
+            document.body.style.overflow = '';
+        }
     </script>
+
+    <!-- Mobile Bottom Bar (only visible on mobile) -->
+    <div class="mobile-bottom-bar">
+        <div class="btn-group">
+            <a href="tel:8632967215" class="btn btn-call">📞 Call Now</a>
+            <a href="#booking" class="btn btn-primary">Book Online</a>
+        </div>
+    </div>
 </body>
 </html>
