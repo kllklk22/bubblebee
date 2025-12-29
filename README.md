@@ -2,15 +2,6 @@
 
 Professional cleaning service website with integrated booking system for Polk County, Florida.
 
-## Quick Start
-
-```bash
-npm install
-npm run init-db
-npm start
-```
-
-Then open http://localhost:3001
 
 ## Features
 
