@@ -32,6 +32,9 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 
+// Trust proxy for Railway/Heroku/etc
+app.set('trust proxy', 1);
+
 // WebSocket server for real-time updates
 const wss = new WebSocketServer({ server, path: '/ws' });
 const wsClients = new Set();
@@ -59,8 +62,7 @@ function broadcast(event, data) {
 // ══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE
 // ══════════════════════════════════════════════════════════════════════════════
-// Trust proxy for Railway
-app.set('trust proxy', 1);
+
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({
@@ -96,7 +98,7 @@ app.get('/api/health', (req, res) => {
         version: '1.0.0',
         services: {
             database: 'connected',
-            email: process.env.SMTP_HOST ? 'configured' : 'not configured',
+            email: 'configured (Resend)',
             payments: paymentService.isConfigured() ? 'configured' : 'not configured'
         }
     });
@@ -121,7 +123,7 @@ app.post('/api/test-email', auth.requireAuth, auth.requireAdmin, async (req, res
         res.status(500).json({ 
             success: false, 
             error: error.message,
-            hint: 'Make sure SMTP is configured in .env file'
+            hint: 'Make sure Resend API key is configured'
         });
     }
 });
@@ -223,28 +225,35 @@ app.post('/api/auth/customer/register', async (req, res) => {
         db.insert('customers', {
             id: customerId,
             email: email.toLowerCase(),
-            password_hash: passwordHash,
-            first_name: firstName,
-            last_name: lastName,
-            phone,
-            portal_access: 1
+            passwordHash,
+            firstName,
+            lastName,
+            phone: phone || null,
+            source: 'website',
+            is_active: 1
         });
         
         // Send welcome email
         await emailService.sendWelcome({
-            email: email,
+            email: email.toLowerCase(),
             customerName: firstName
         });
         
         const token = auth.generateToken({
             userId: customerId,
-            email: email,
+            email: email.toLowerCase(),
             isCustomer: true
         });
         
         res.status(201).json({
+            success: true,
             token,
-            customer: { id: customerId, email, firstName, lastName }
+            customer: {
+                id: customerId,
+                email: email.toLowerCase(),
+                firstName,
+                lastName
+            }
         });
     } catch (err) {
         console.error('Registration error:', err);
@@ -254,160 +263,232 @@ app.post('/api/auth/customer/register', async (req, res) => {
 
 // Get current user
 app.get('/api/auth/me', auth.requireAuth, (req, res) => {
-    try {
-        if (req.isCustomer) {
-            const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [req.userId]);
-            if (!customer) return res.status(404).json({ error: 'Customer not found' });
-            delete customer.passwordHash;
-            res.json({ customer });
-        } else {
-            const user = db.queryOne('SELECT * FROM users WHERE id = ?', [req.userId]);
-            if (!user) return res.status(404).json({ error: 'User not found' });
-            delete user.passwordHash;
-            res.json({ user });
-        }
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get user' });
+    if (req.user.isCustomer) {
+        const customer = db.queryOne('SELECT id, email, first_name as firstName, last_name as lastName, phone FROM customers WHERE id = ?', [req.user.userId]);
+        return res.json({ customer });
     }
+    
+    const user = db.queryOne('SELECT id, email, first_name as firstName, last_name as lastName, role FROM users WHERE id = ?', [req.user.userId]);
+    res.json({ user });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PUBLIC ROUTES (Website)
+// SERVICES ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Get services list
+// List services (public)
 app.get('/api/services', (req, res) => {
     try {
-        const services = db.query('SELECT * FROM services WHERE is_active = 1');
-        const addons = db.query('SELECT * FROM service_addons WHERE is_active = 1');
-        
-        // Get pricing settings
-        const taxRate = db.queryOne("SELECT value FROM settings WHERE key = 'tax_rate'")?.value || '0';
-        
-        res.json({
-            services,
-            addons,
-            pricing: {
-                taxRate: parseFloat(taxRate),
-                sqftRate: 0.03,
-                bedroomRate: 15,
-                bathroomRate: 20,
-                frequencyDiscounts: { once: 0, weekly: 20, biweekly: 15, monthly: 10 }
-            }
-        });
+        const services = db.query('SELECT * FROM services WHERE is_active = 1 ORDER BY name');
+        res.json({ services });
     } catch (err) {
         res.status(500).json({ error: 'Failed to get services' });
     }
 });
 
-// Check service area
-app.get('/api/service-area', (req, res) => {
+// Get service by ID (public)
+app.get('/api/services/:id', (req, res) => {
     try {
-        const { zip } = req.query;
-        if (!zip) return res.status(400).json({ error: 'Zip code required' });
-        
-        const area = db.queryOne('SELECT * FROM service_areas WHERE zip_code = ? AND is_active = 1', [zip]);
-        
-        if (area) {
-            res.json({ available: true, area: area.areaName, city: area.city, surcharge: area.surcharge });
-        } else {
-            res.json({ available: false, zip });
+        const service = db.queryOne('SELECT * FROM services WHERE id = ?', [req.params.id]);
+        if (!service) {
+            return res.status(404).json({ error: 'Service not found' });
         }
+        res.json({ service });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to check service area' });
+        res.status(500).json({ error: 'Failed to get service' });
     }
 });
 
-// Get available time slots for a date
-app.get('/api/availability', (req, res) => {
+// Create service
+app.post('/api/services', auth.requireAuth, auth.requireManager, (req, res) => {
     try {
-        const { date } = req.query;
-        if (!date) return res.status(400).json({ error: 'Date required' });
+        const { name, description, basePrice, duration, category } = req.body;
         
-        // Get already booked slots
-        const bookedSlots = db.query(`
-            SELECT scheduled_time FROM bookings 
-            WHERE scheduled_date = ? AND status NOT IN ('cancelled', 'no_show')
-        `, [date]).map(b => b.scheduledTime);
+        const serviceId = uuid();
+        db.insert('services', {
+            id: serviceId,
+            name,
+            description,
+            base_price: basePrice,
+            duration_minutes: duration || 60,
+            category: category || 'general',
+            is_active: 1
+        });
         
-        const allSlots = ['8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM'];
-        const availableSlots = allSlots.filter(slot => !bookedSlots.includes(slot));
-        
-        res.json({ date, availableSlots, bookedSlots });
+        const service = db.queryOne('SELECT * FROM services WHERE id = ?', [serviceId]);
+        res.status(201).json({ service });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to get availability' });
+        res.status(500).json({ error: 'Failed to create service' });
     }
 });
 
-// Join waitlist
-app.post('/api/waitlist', (req, res) => {
+// Update service
+app.put('/api/services/:id', auth.requireAuth, auth.requireManager, (req, res) => {
     try {
-        const { email, zip } = req.body;
-        if (!email || !zip) return res.status(400).json({ error: 'Email and zip required' });
-        
-        db.insert('waitlist', { id: uuid(), email, zip_code: zip });
-        res.json({ success: true });
+        const updates = req.body;
+        db.update('services', req.params.id, updates);
+        const service = db.queryOne('SELECT * FROM services WHERE id = ?', [req.params.id]);
+        res.json({ service });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to join waitlist' });
+        res.status(500).json({ error: 'Failed to update service' });
     }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BOOKING ROUTES
+// CUSTOMERS ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// List customers
+app.get('/api/customers', auth.requireAuth, auth.requireStaff, (req, res) => {
+    try {
+        const { search, limit = 50 } = req.query;
+        
+        let sql = 'SELECT * FROM customers WHERE 1=1';
+        const params = [];
+        
+        if (search) {
+            sql += ' AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)';
+            const term = `%${search}%`;
+            params.push(term, term, term);
+        }
+        
+        sql += ' ORDER BY created_at DESC LIMIT ?';
+        params.push(parseInt(limit));
+        
+        const customers = db.query(sql, params);
+        res.json({ customers });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to get customers' });
+    }
+});
+
+// Get customer details
+app.get('/api/customers/:id', auth.requireAuth, auth.requireStaff, (req, res) => {
+    try {
+        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [req.params.id]);
+        if (!customer) {
+            return res.status(404).json({ error: 'Customer not found' });
+        }
+        
+        // Get customer's bookings
+        const bookings = db.query(`
+            SELECT b.*, s.name as service_name 
+            FROM bookings b 
+            LEFT JOIN services s ON b.service_id = s.id 
+            WHERE b.customer_id = ? 
+            ORDER BY b.scheduled_date DESC
+        `, [req.params.id]);
+        
+        // Get customer's invoices
+        const invoices = db.query('SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC', [req.params.id]);
+        
+        res.json({ customer, bookings, invoices });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to get customer' });
+    }
+});
+
+// Create customer (admin)
+app.post('/api/customers', auth.requireAuth, auth.requireStaff, (req, res) => {
+    try {
+        const { email, firstName, lastName, phone, address, notes } = req.body;
+        
+        if (!email || !firstName || !lastName) {
+            return res.status(400).json({ error: 'Email, first name, and last name required' });
+        }
+        
+        const existing = db.queryOne('SELECT id FROM customers WHERE email = ?', [email.toLowerCase()]);
+        if (existing) {
+            return res.status(400).json({ error: 'Customer with this email already exists' });
+        }
+        
+        const customerId = uuid();
+        db.insert('customers', {
+            id: customerId,
+            email: email.toLowerCase(),
+            firstName,
+            lastName,
+            phone: phone || null,
+            address: address || null,
+            notes: notes || null,
+            source: 'admin',
+            is_active: 1
+        });
+        
+        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [customerId]);
+        res.status(201).json({ customer });
+    } catch (err) {
+        console.error('Create customer error:', err);
+        res.status(500).json({ error: 'Failed to create customer' });
+    }
+});
+
+// Update customer
+app.put('/api/customers/:id', auth.requireAuth, auth.requireStaff, (req, res) => {
+    try {
+        const updates = req.body;
+        db.update('customers', req.params.id, updates);
+        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [req.params.id]);
+        res.json({ customer });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update customer' });
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BOOKINGS ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Create booking (public - from website)
 app.post('/api/bookings', async (req, res) => {
     try {
         const data = req.body;
-        
-        // Validate required fields
-        if (!data.customerEmail || !data.scheduledDate || !data.scheduledTime) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
+        console.log('📅 New booking request:', data);
         
         // Find or create customer
-        let customer = db.queryOne('SELECT * FROM customers WHERE email = ?', [data.customerEmail.toLowerCase()]);
+        let customer = db.queryOne('SELECT * FROM customers WHERE email = ?', [data.customerEmail?.toLowerCase()]);
         
         if (!customer) {
             const customerId = uuid();
+            const nameParts = (data.customerName || '').split(' ');
             db.insert('customers', {
                 id: customerId,
-                email: data.customerEmail.toLowerCase(),
-                first_name: data.customerName?.split(' ')[0] || 'Customer',
-                last_name: data.customerName?.split(' ').slice(1).join(' ') || '',
-                phone: data.customerPhone,
-                address: data.address,
-                source: 'website'
+                email: data.customerEmail?.toLowerCase(),
+                firstName: nameParts[0] || 'Customer',
+                lastName: nameParts.slice(1).join(' ') || '',
+                phone: data.customerPhone || null,
+                address: data.address || null,
+                source: 'website',
+                is_active: 1
             });
             customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [customerId]);
         }
         
-        // Get service
-        const serviceMap = { regular: 'svc_regular', deep: 'svc_deep', moveout: 'svc_moveout' };
-        const serviceId = serviceMap[data.service] || 'svc_regular';
-        const service = db.queryOne('SELECT * FROM services WHERE id = ?', [serviceId]);
+        // Find service
+        const serviceMap = {
+            'standard': 'Regular Cleaning',
+            'deep': 'Deep Cleaning',
+            'standard_carpet': 'Standard + Carpet',
+            'deep_carpet': 'Deep + Carpet',
+            'standard_pressure': 'Standard + Pressure Wash',
+            'pressure_only': 'Pressure Wash Only',
+            'green': 'Green Clean'
+        };
         
-        // Calculate price
-        const basePrice = service?.basePrice || 99;
-        const sizeAdjustment = Math.max(0, ((data.sqft || 1000) - 1000) * 0.03);
-        const roomsAdjustment = (Math.max(0, (data.bedrooms || 1) - 1) * 15) + 
-                               (Math.max(0, (data.bathrooms || 1) - 1) * 20);
-        const totalPrice = data.price || Math.round(basePrice + sizeAdjustment + roomsAdjustment);
+        const serviceName = serviceMap[data.service] || data.service || 'Cleaning';
+        let service = db.queryOne('SELECT * FROM services WHERE name LIKE ?', [`%${serviceName}%`]);
         
         // Create booking
         const bookingId = uuid();
+        const totalPrice = data.price || 0;
+        
         db.insert('bookings', {
             id: bookingId,
             customer_id: customer.id,
-            service_id: serviceId,
+            service_id: service?.id || null,
             scheduled_date: data.scheduledDate,
             scheduled_time: data.scheduledTime,
             address: data.address || customer.address,
-            sqft: data.sqft,
-            bedrooms: data.bedrooms,
-            bathrooms: data.bathrooms,
-            base_price: basePrice,
             total_price: totalPrice,
             status: 'pending',
             frequency: data.frequency || 'once',
@@ -421,8 +502,8 @@ app.post('/api/bookings', async (req, res) => {
             email: customer.email,
             customerName: `${customer.firstName} ${customer.lastName}`,
             phone: customer.phone || data.customerPhone,
-            service: service?.name || 'Cleaning',
-            date: new Date(data.scheduledDate).toLocaleDateString('en-US', { 
+            service: serviceName,
+            date: new Date(data.scheduledDate + 'T12:00:00').toLocaleDateString('en-US', { 
                 weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
             }),
             time: data.scheduledTime,
@@ -442,16 +523,12 @@ app.post('/api/bookings', async (req, res) => {
         });
         
         // Broadcast to dashboard
-        broadcast('booking:created', booking);
+        broadcast('new_booking', { booking, customer });
         
-        // Send Discord webhook if configured
-        sendDiscordWebhook(`🌐 **New Website Booking**\n👤 ${customer.firstName} ${customer.lastName}\n📅 ${data.scheduledDate} at ${data.scheduledTime}\n💰 $${totalPrice}`);
-        
-        res.status(201).json({
-            success: true,
-            bookingId,
-            message: 'Booking confirmed',
-            booking
+        res.status(201).json({ 
+            success: true, 
+            booking,
+            message: 'Booking confirmed! Check your email for details.'
         });
     } catch (err) {
         console.error('Create booking error:', err);
@@ -459,10 +536,10 @@ app.post('/api/bookings', async (req, res) => {
     }
 });
 
-// Get all bookings (staff only)
+// List bookings (staff)
 app.get('/api/bookings', auth.requireAuth, auth.requireStaff, (req, res) => {
     try {
-        const { date, status, customerId } = req.query;
+        const { status, date, customerId, limit = 100 } = req.query;
         
         let sql = `
             SELECT b.*, c.first_name || ' ' || c.last_name as customer_name, 
@@ -477,20 +554,21 @@ app.get('/api/bookings', auth.requireAuth, auth.requireStaff, (req, res) => {
         `;
         const params = [];
         
-        if (date) {
-            sql += ' AND b.scheduled_date = ?';
-            params.push(date);
-        }
         if (status) {
             sql += ' AND b.status = ?';
             params.push(status);
+        }
+        if (date) {
+            sql += ' AND b.scheduled_date = ?';
+            params.push(date);
         }
         if (customerId) {
             sql += ' AND b.customer_id = ?';
             params.push(customerId);
         }
         
-        sql += ' ORDER BY b.scheduled_date DESC, b.scheduled_time ASC';
+        sql += ' ORDER BY b.scheduled_date DESC, b.scheduled_time LIMIT ?';
+        params.push(parseInt(limit));
         
         const bookings = db.query(sql, params);
         res.json({ bookings });
@@ -499,23 +577,21 @@ app.get('/api/bookings', auth.requireAuth, auth.requireStaff, (req, res) => {
     }
 });
 
-// Get single booking
+// Get booking by ID
 app.get('/api/bookings/:id', auth.requireAuth, (req, res) => {
     try {
         const booking = db.queryOne(`
             SELECT b.*, c.first_name || ' ' || c.last_name as customer_name,
-                   c.email as customer_email, s.name as service_name
+                   c.email as customer_email, c.phone as customer_phone,
+                   s.name as service_name
             FROM bookings b
             LEFT JOIN customers c ON b.customer_id = c.id
             LEFT JOIN services s ON b.service_id = s.id
             WHERE b.id = ?
         `, [req.params.id]);
         
-        if (!booking) return res.status(404).json({ error: 'Booking not found' });
-        
-        // Check access for customers
-        if (req.isCustomer && booking.customerId !== req.userId) {
-            return res.status(403).json({ error: 'Access denied' });
+        if (!booking) {
+            return res.status(404).json({ error: 'Booking not found' });
         }
         
         res.json({ booking });
@@ -524,173 +600,97 @@ app.get('/api/bookings/:id', auth.requireAuth, (req, res) => {
     }
 });
 
-// Update booking
-app.put('/api/bookings/:id', auth.requireAuth, auth.requireStaff, (req, res) => {
+// Update booking status
+app.patch('/api/bookings/:id/status', auth.requireAuth, auth.requireStaff, (req, res) => {
     try {
-        const { id } = req.params;
-        const updates = req.body;
+        const { status, notes } = req.body;
         
-        const booking = db.queryOne('SELECT * FROM bookings WHERE id = ?', [id]);
-        if (!booking) return res.status(404).json({ error: 'Booking not found' });
-        
-        // Build update query
-        const allowedFields = ['scheduled_date', 'scheduled_time', 'status', 'assigned_to', 'notes', 'total_price'];
-        const updateData = {};
-        
-        for (const field of allowedFields) {
-            const camelField = field.replace(/_([a-z])/g, (_, l) => l.toUpperCase());
-            if (updates[camelField] !== undefined) {
-                updateData[field] = updates[camelField];
-            }
+        const updates = { status };
+        if (status === 'completed') {
+            updates.completed_at = new Date().toISOString();
+        }
+        if (notes) {
+            updates.notes = notes;
         }
         
-        // Handle status changes
-        if (updates.status === 'confirmed' && !booking.confirmedAt) {
-            updateData.confirmed_at = new Date().toISOString();
-        }
-        if (updates.status === 'in_progress' && !booking.startedAt) {
-            updateData.started_at = new Date().toISOString();
-        }
-        if (updates.status === 'completed' && !booking.completedAt) {
-            updateData.completed_at = new Date().toISOString();
-        }
-        if (updates.status === 'cancelled') {
-            updateData.cancelled_at = new Date().toISOString();
-            updateData.cancellation_reason = updates.cancellationReason;
-        }
+        db.update('bookings', req.params.id, updates);
+        const booking = db.queryOne('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
         
-        if (Object.keys(updateData).length > 0) {
-            db.update('bookings', updateData, 'id = ?', [id]);
-        }
-        
-        const updatedBooking = db.queryOne('SELECT * FROM bookings WHERE id = ?', [id]);
-        broadcast('booking:updated', updatedBooking);
-        
-        res.json({ booking: updatedBooking });
+        broadcast('booking_updated', { booking });
+        res.json({ booking });
     } catch (err) {
-        console.error('Update booking error:', err);
         res.status(500).json({ error: 'Failed to update booking' });
     }
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// CUSTOMER ROUTES
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Get all customers (staff)
-app.get('/api/customers', auth.requireAuth, auth.requireStaff, (req, res) => {
+// Assign booking to staff
+app.patch('/api/bookings/:id/assign', auth.requireAuth, auth.requireManager, (req, res) => {
     try {
-        const customers = db.query(`
-            SELECT c.*, 
-                   (SELECT COUNT(*) FROM bookings WHERE customer_id = c.id) as total_bookings,
-                   (SELECT COUNT(*) FROM bookings WHERE customer_id = c.id AND status = 'completed') as completed_bookings
-            FROM customers c
-            WHERE c.is_active = 1
-            ORDER BY c.created_at DESC
-        `);
-        res.json({ customers });
+        const { userId } = req.body;
+        
+        db.update('bookings', req.params.id, { assigned_to: userId });
+        const booking = db.queryOne('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
+        
+        broadcast('booking_assigned', { booking });
+        res.json({ booking });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to get customers' });
+        res.status(500).json({ error: 'Failed to assign booking' });
     }
 });
 
-// Get single customer
-app.get('/api/customers/:id', auth.requireAuth, (req, res) => {
-    try {
-        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [req.params.id]);
-        if (!customer) return res.status(404).json({ error: 'Customer not found' });
-        
-        // Get customer's bookings
-        const bookings = db.query(`
-            SELECT b.*, s.name as service_name 
-            FROM bookings b 
-            LEFT JOIN services s ON b.service_id = s.id
-            WHERE b.customer_id = ? 
-            ORDER BY b.scheduled_date DESC
-        `, [req.params.id]);
-        
-        // Get customer's invoices
-        const invoices = db.query('SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC', [req.params.id]);
-        
-        delete customer.passwordHash;
-        res.json({ customer, bookings, invoices });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get customer' });
-    }
-});
+// ══════════════════════════════════════════════════════════════════════════════
+// INVOICES ROUTES
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Create customer
-app.post('/api/customers', auth.requireAuth, auth.requireStaff, (req, res) => {
+// Create invoice
+app.post('/api/invoices', auth.requireAuth, auth.requireStaff, async (req, res) => {
     try {
-        const { email, firstName, lastName, phone, address, city, state, zipCode, notes } = req.body;
-        
-        if (!firstName || !lastName) {
-            return res.status(400).json({ error: 'First and last name required' });
-        }
-        
-        const customerId = uuid();
-        db.insert('customers', {
-            id: customerId,
-            email: email?.toLowerCase(),
-            first_name: firstName,
-            last_name: lastName,
-            phone,
-            address,
-            city,
-            state,
-            zip_code: zipCode,
-            notes,
-            source: 'manual'
-        });
+        const { customerId, bookingId, items, dueDate, notes } = req.body;
         
         const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [customerId]);
-        broadcast('customer:created', customer);
+        if (!customer) {
+            return res.status(404).json({ error: 'Customer not found' });
+        }
         
-        res.status(201).json({ customer });
+        // Calculate total
+        const total = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+        
+        const invoiceId = uuid();
+        const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
+        
+        db.insert('invoices', {
+            id: invoiceId,
+            invoice_number: invoiceNumber,
+            customer_id: customerId,
+            booking_id: bookingId || null,
+            items: JSON.stringify(items),
+            subtotal: total,
+            tax: 0,
+            total: total,
+            status: 'pending',
+            due_date: dueDate,
+            notes: notes || null
+        });
+        
+        const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
+        
+        // Send invoice email
+        await emailService.sendInvoice({
+            email: customer.email,
+            customerName: `${customer.firstName} ${customer.lastName}`,
+            invoiceNumber,
+            total,
+            dueDate
+        });
+        
+        res.status(201).json({ invoice });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to create customer' });
+        console.error('Create invoice error:', err);
+        res.status(500).json({ error: 'Failed to create invoice' });
     }
 });
 
-// Update customer
-app.put('/api/customers/:id', auth.requireAuth, (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        // Customers can only update themselves
-        if (req.isCustomer && req.userId !== id) {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        const updates = req.body;
-        const allowedFields = ['first_name', 'last_name', 'phone', 'address', 'city', 'state', 'zip_code', 'notes'];
-        const updateData = {};
-        
-        for (const field of allowedFields) {
-            const camelField = field.replace(/_([a-z])/g, (_, l) => l.toUpperCase());
-            if (updates[camelField] !== undefined) {
-                updateData[field] = updates[camelField];
-            }
-        }
-        
-        if (Object.keys(updateData).length > 0) {
-            db.update('customers', updateData, 'id = ?', [id]);
-        }
-        
-        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [id]);
-        delete customer.passwordHash;
-        
-        res.json({ customer });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to update customer' });
-    }
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-// INVOICE ROUTES
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Get all invoices
+// List invoices
 app.get('/api/invoices', auth.requireAuth, auth.requireStaff, (req, res) => {
     try {
         const { status, customerId } = req.query;
@@ -721,237 +721,112 @@ app.get('/api/invoices', auth.requireAuth, auth.requireStaff, (req, res) => {
     }
 });
 
-// Create invoice
-app.post('/api/invoices', auth.requireAuth, auth.requireStaff, (req, res) => {
+// Get invoice by ID
+app.get('/api/invoices/:id', auth.requireAuth, (req, res) => {
     try {
-        const { customerId, bookingId, lineItems, dueDate, notes } = req.body;
+        const invoice = db.queryOne(`
+            SELECT i.*, c.first_name || ' ' || c.last_name as customer_name, c.email as customer_email
+            FROM invoices i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            WHERE i.id = ?
+        `, [req.params.id]);
         
-        if (!customerId || !lineItems?.length) {
-            return res.status(400).json({ error: 'Customer and line items required' });
+        if (!invoice) {
+            return res.status(404).json({ error: 'Invoice not found' });
         }
         
-        // Get invoice prefix and generate number
-        const prefix = db.queryOne("SELECT value FROM settings WHERE key = 'invoice_prefix'")?.value || 'INV-';
-        const lastInvoice = db.queryOne('SELECT invoice_number FROM invoices ORDER BY created_at DESC LIMIT 1');
-        const nextNum = lastInvoice ? parseInt(lastInvoice.invoiceNumber.replace(/\D/g, '')) + 1 : 1001;
-        const invoiceNumber = `${prefix}${nextNum}`;
-        
-        // Calculate totals
-        const subtotal = lineItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
-        const taxRate = parseFloat(db.queryOne("SELECT value FROM settings WHERE key = 'tax_rate'")?.value || '0');
-        const taxAmount = subtotal * taxRate;
-        const total = subtotal + taxAmount;
-        
-        // Get default due date
-        const dueDays = parseInt(db.queryOne("SELECT value FROM settings WHERE key = 'invoice_due_days'")?.value || '14');
-        const defaultDueDate = new Date();
-        defaultDueDate.setDate(defaultDueDate.getDate() + dueDays);
-        
-        const invoiceId = uuid();
-        db.insert('invoices', {
-            id: invoiceId,
-            invoice_number: invoiceNumber,
-            customer_id: customerId,
-            booking_id: bookingId,
-            subtotal,
-            tax_rate: taxRate,
-            tax_amount: taxAmount,
-            total,
-            amount_due: total,
-            due_date: dueDate || defaultDueDate.toISOString().slice(0, 10),
-            notes,
-            status: 'draft'
-        });
-        
-        // Insert line items
-        for (const item of lineItems) {
-            db.insert('invoice_items', {
-                id: uuid(),
-                invoice_id: invoiceId,
-                description: item.description,
-                quantity: item.quantity || 1,
-                unit_price: item.unitPrice,
-                total: (item.quantity || 1) * item.unitPrice
-            });
-        }
-        
-        const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
-        broadcast('invoice:created', invoice);
-        
-        res.status(201).json({ invoice });
+        invoice.items = JSON.parse(invoice.items || '[]');
+        res.json({ invoice });
     } catch (err) {
-        console.error('Create invoice error:', err);
-        res.status(500).json({ error: 'Failed to create invoice' });
-    }
-});
-
-// Send invoice
-app.post('/api/invoices/:id/send', auth.requireAuth, auth.requireStaff, async (req, res) => {
-    try {
-        const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [req.params.id]);
-        if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
-        
-        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [invoice.customerId]);
-        if (!customer?.email) return res.status(400).json({ error: 'Customer has no email' });
-        
-        await emailService.sendInvoice({
-            email: customer.email,
-            customerName: `${customer.firstName} ${customer.lastName}`,
-            invoiceNumber: invoice.invoiceNumber,
-            invoiceId: invoice.id,
-            total: invoice.total,
-            dueDate: invoice.dueDate
-        });
-        
-        db.run('UPDATE invoices SET status = ?, sent_at = datetime("now") WHERE id = ?', ['sent', invoice.id]);
-        
-        const updatedInvoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoice.id]);
-        res.json({ invoice: updatedInvoice });
-    } catch (err) {
-        console.error('Send invoice error:', err);
-        res.status(500).json({ error: 'Failed to send invoice' });
+        res.status(500).json({ error: 'Failed to get invoice' });
     }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PAYMENT ROUTES
+// PAYMENTS ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Create checkout session for invoice
-app.post('/api/payments/checkout', auth.optionalAuth, async (req, res) => {
+// Create payment intent
+app.post('/api/payments/create-intent', auth.requireAuth, async (req, res) => {
     try {
-        const { invoiceId } = req.body;
+        const { invoiceId, amount } = req.body;
         
-        const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
-        if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+        const result = await paymentService.createPaymentIntent(amount, {
+            invoiceId,
+            customerId: req.user.userId
+        });
         
-        const customer = db.queryOne('SELECT * FROM customers WHERE id = ?', [invoice.customerId]);
-        
-        if (!paymentService.isConfigured()) {
-            return res.status(400).json({ error: 'Payments not configured' });
-        }
-        
-        const session = await paymentService.createCheckoutSession(invoice, customer);
-        
-        res.json({ sessionId: session.id, url: session.url });
+        res.json(result);
     } catch (err) {
-        console.error('Checkout error:', err);
-        res.status(500).json({ error: 'Failed to create checkout session' });
+        res.status(500).json({ error: 'Failed to create payment intent' });
     }
 });
 
-// Record manual payment
+// Record payment
 app.post('/api/payments', auth.requireAuth, auth.requireStaff, (req, res) => {
     try {
-        const { invoiceId, amount, method, referenceNumber, notes } = req.body;
+        const { invoiceId, amount, method, reference } = req.body;
         
         const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
-        if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+        if (!invoice) {
+            return res.status(404).json({ error: 'Invoice not found' });
+        }
         
         const paymentId = uuid();
         db.insert('payments', {
             id: paymentId,
             invoice_id: invoiceId,
-            customer_id: invoice.customerId,
+            customer_id: invoice.customer_id,
             amount,
-            method,
-            reference_number: referenceNumber,
-            notes,
-            status: 'completed'
+            payment_method: method,
+            transaction_id: reference || null,
+            status: 'completed',
+            processed_at: new Date().toISOString()
         });
         
-        // Update invoice
-        const newAmountPaid = (invoice.amountPaid || 0) + amount;
-        const newAmountDue = invoice.total - newAmountPaid;
-        const newStatus = newAmountDue <= 0 ? 'paid' : 'partial';
+        // Update invoice status
+        const totalPaid = db.queryOne('SELECT SUM(amount) as total FROM payments WHERE invoice_id = ?', [invoiceId])?.total || 0;
+        const newStatus = totalPaid >= invoice.total ? 'paid' : 'partial';
+        db.update('invoices', invoiceId, { status: newStatus, paid_at: newStatus === 'paid' ? new Date().toISOString() : null });
         
-        db.run(`
-            UPDATE invoices 
-            SET amount_paid = ?, amount_due = ?, status = ?, paid_date = datetime('now')
-            WHERE id = ?
-        `, [newAmountPaid, Math.max(0, newAmountDue), newStatus, invoiceId]);
-        
-        // Update customer total spent
-        db.run('UPDATE customers SET total_spent = total_spent + ? WHERE id = ?', [amount, invoice.customerId]);
-        
-        broadcast('payment:received', { invoiceId, amount });
-        
-        res.status(201).json({ paymentId, invoice: db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]) });
+        const payment = db.queryOne('SELECT * FROM payments WHERE id = ?', [paymentId]);
+        res.status(201).json({ payment });
     } catch (err) {
-        console.error('Record payment error:', err);
         res.status(500).json({ error: 'Failed to record payment' });
     }
 });
 
-// Stripe webhook handler
-app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
-    try {
-        const signature = req.headers['stripe-signature'];
-        const event = await paymentService.handleWebhook(req.body, signature);
-        
-        if (event.type === 'checkout.session.completed') {
-            const session = event.data.object;
-            const invoiceId = session.metadata.invoice_id;
-            
-            if (invoiceId) {
-                const invoice = db.queryOne('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
-                
-                // Record payment
-                db.insert('payments', {
-                    id: uuid(),
-                    invoice_id: invoiceId,
-                    customer_id: invoice.customerId,
-                    amount: session.amount_total / 100,
-                    method: 'card',
-                    stripe_payment_id: session.payment_intent,
-                    status: 'completed'
-                });
-                
-                // Update invoice
-                db.run(`
-                    UPDATE invoices 
-                    SET amount_paid = total, amount_due = 0, status = 'paid', 
-                        paid_date = datetime('now'), stripe_payment_intent = ?
-                    WHERE id = ?
-                `, [session.payment_intent, invoiceId]);
-                
-                broadcast('payment:received', { invoiceId });
-            }
-        }
-        
-        res.json({ received: true });
-    } catch (err) {
-        console.error('Stripe webhook error:', err);
-        res.status(400).json({ error: 'Webhook error' });
-    }
-});
-
 // ══════════════════════════════════════════════════════════════════════════════
-// TEAM/USER ROUTES
+// USERS/STAFF ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Get all team members
-app.get('/api/team', auth.requireAuth, auth.requireStaff, (req, res) => {
+// List users
+app.get('/api/users', auth.requireAuth, auth.requireManager, (req, res) => {
     try {
-        const users = db.query('SELECT * FROM users WHERE is_active = 1 ORDER BY created_at DESC');
-        users.forEach(u => delete u.passwordHash);
+        const users = db.query(`
+            SELECT id, email, first_name as firstName, last_name as lastName, 
+                   role, phone, is_active, created_at, last_login_at
+            FROM users ORDER BY created_at DESC
+        `);
         res.json({ users });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to get team' });
+        res.status(500).json({ error: 'Failed to get users' });
     }
 });
 
-// Create team member
-app.post('/api/team', auth.requireAuth, auth.requireAdmin, (req, res) => {
+// Create user
+app.post('/api/users', auth.requireAuth, auth.requireAdmin, (req, res) => {
     try {
-        const { email, password, firstName, lastName, phone, role, hourlyRate } = req.body;
+        const { email, password, firstName, lastName, role, phone } = req.body;
         
         if (!email || !password || !firstName || !lastName) {
-            return res.status(400).json({ error: 'Missing required fields' });
+            return res.status(400).json({ error: 'All fields required' });
         }
         
         const existing = db.queryOne('SELECT id FROM users WHERE email = ?', [email.toLowerCase()]);
-        if (existing) return res.status(400).json({ error: 'Email already exists' });
+        if (existing) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
         
         const userId = uuid();
         const passwordHash = bcrypt.hashSync(password, 10);
@@ -959,113 +834,36 @@ app.post('/api/team', auth.requireAuth, auth.requireAdmin, (req, res) => {
         db.insert('users', {
             id: userId,
             email: email.toLowerCase(),
-            password_hash: passwordHash,
-            first_name: firstName,
-            last_name: lastName,
-            phone,
-            role: role || 'employee',
-            hourly_rate: hourlyRate || 0
+            passwordHash,
+            firstName,
+            lastName,
+            role: role || 'staff',
+            phone: phone || null,
+            is_active: 1
         });
         
-        const user = db.queryOne('SELECT * FROM users WHERE id = ?', [userId]);
-        delete user.passwordHash;
-        
+        const user = db.queryOne('SELECT id, email, first_name as firstName, last_name as lastName, role FROM users WHERE id = ?', [userId]);
         res.status(201).json({ user });
     } catch (err) {
         res.status(500).json({ error: 'Failed to create user' });
     }
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// TIME TRACKING ROUTES
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Clock in
-app.post('/api/time/clock-in', auth.requireAuth, auth.requireStaff, (req, res) => {
+// Update user
+app.put('/api/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) => {
     try {
-        const { bookingId, location } = req.body;
+        const updates = req.body;
         
-        // Check if already clocked in
-        const active = db.queryOne('SELECT * FROM time_entries WHERE user_id = ? AND clock_out IS NULL', [req.userId]);
-        if (active) return res.status(400).json({ error: 'Already clocked in' });
-        
-        const entryId = uuid();
-        db.insert('time_entries', {
-            id: entryId,
-            user_id: req.userId,
-            booking_id: bookingId,
-            clock_in: new Date().toISOString(),
-            clock_in_location: location
-        });
-        
-        const entry = db.queryOne('SELECT * FROM time_entries WHERE id = ?', [entryId]);
-        broadcast('time:clockIn', entry);
-        
-        res.json({ entry });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to clock in' });
-    }
-});
-
-// Clock out
-app.post('/api/time/clock-out', auth.requireAuth, auth.requireStaff, (req, res) => {
-    try {
-        const { location, notes } = req.body;
-        
-        const active = db.queryOne('SELECT * FROM time_entries WHERE user_id = ? AND clock_out IS NULL', [req.userId]);
-        if (!active) return res.status(400).json({ error: 'Not clocked in' });
-        
-        const clockOut = new Date();
-        const clockIn = new Date(active.clockIn);
-        const durationMinutes = Math.round((clockOut - clockIn) / 60000);
-        
-        db.run(`
-            UPDATE time_entries 
-            SET clock_out = ?, clock_out_location = ?, duration_minutes = ?, notes = ?
-            WHERE id = ?
-        `, [clockOut.toISOString(), location, durationMinutes, notes, active.id]);
-        
-        const entry = db.queryOne('SELECT * FROM time_entries WHERE id = ?', [active.id]);
-        broadcast('time:clockOut', entry);
-        
-        res.json({ entry });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to clock out' });
-    }
-});
-
-// Get time entries
-app.get('/api/time', auth.requireAuth, auth.requireStaff, (req, res) => {
-    try {
-        const { userId, startDate, endDate } = req.query;
-        
-        let sql = `
-            SELECT t.*, u.first_name || ' ' || u.last_name as user_name
-            FROM time_entries t
-            LEFT JOIN users u ON t.user_id = u.id
-            WHERE 1=1
-        `;
-        const params = [];
-        
-        if (userId) {
-            sql += ' AND t.user_id = ?';
-            params.push(userId);
-        }
-        if (startDate) {
-            sql += ' AND date(t.clock_in) >= ?';
-            params.push(startDate);
-        }
-        if (endDate) {
-            sql += ' AND date(t.clock_in) <= ?';
-            params.push(endDate);
+        if (updates.password) {
+            updates.passwordHash = bcrypt.hashSync(updates.password, 10);
+            delete updates.password;
         }
         
-        sql += ' ORDER BY t.clock_in DESC';
-        
-        const entries = db.query(sql, params);
-        res.json({ entries });
+        db.update('users', req.params.id, updates);
+        const user = db.queryOne('SELECT id, email, first_name as firstName, last_name as lastName, role FROM users WHERE id = ?', [req.params.id]);
+        res.json({ user });
     } catch (err) {
-        res.status(500).json({ error: 'Failed to get time entries' });
+        res.status(500).json({ error: 'Failed to update user' });
     }
 });
 
@@ -1097,58 +895,10 @@ app.get('/api/analytics/dashboard', auth.requireAuth, auth.requireStaff, (req, r
             ORDER BY b.created_at DESC LIMIT 5
         `);
         
-        // Top employees (by completed jobs this month)
-        const topEmployees = db.query(`
-            SELECT u.id, u.first_name || ' ' || u.last_name as name,
-                   COUNT(*) as completed_jobs,
-                   COALESCE(SUM(b.total_price), 0) as revenue
-            FROM users u
-            LEFT JOIN bookings b ON b.assigned_to = u.id AND b.status = 'completed' AND date(b.completed_at) >= ?
-            WHERE u.is_active = 1 AND u.role != 'admin'
-            GROUP BY u.id
-            ORDER BY completed_jobs DESC
-            LIMIT 5
-        `, [monthStart]);
-        
-        res.json({ stats, recentBookings, topEmployees });
+        res.json({ stats, recentBookings });
     } catch (err) {
         console.error('Dashboard error:', err);
         res.status(500).json({ error: 'Failed to get dashboard stats' });
-    }
-});
-
-// Revenue report
-app.get('/api/analytics/revenue', auth.requireAuth, auth.requireManager, (req, res) => {
-    try {
-        const { startDate, endDate } = req.query;
-        
-        // Default to last 12 months
-        const start = startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().slice(0, 10);
-        const end = endDate || new Date().toISOString().slice(0, 10);
-        
-        // Monthly revenue
-        const monthlyRevenue = db.query(`
-            SELECT strftime('%Y-%m', processed_at) as month,
-                   SUM(amount) as collected
-            FROM payments
-            WHERE date(processed_at) BETWEEN ? AND ?
-            GROUP BY month
-            ORDER BY month
-        `, [start, end]);
-        
-        // Monthly billed
-        const monthlyBilled = db.query(`
-            SELECT strftime('%Y-%m', created_at) as month,
-                   SUM(total) as billed
-            FROM invoices
-            WHERE date(created_at) BETWEEN ? AND ?
-            GROUP BY month
-            ORDER BY month
-        `, [start, end]);
-        
-        res.json({ monthlyRevenue, monthlyBilled });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get revenue report' });
     }
 });
 
@@ -1187,36 +937,6 @@ app.put('/api/settings', auth.requireAuth, auth.requireAdmin, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
-// ══════════════════════════════════════════════════════════════════════════════
-
-function sendDiscordWebhook(message) {
-    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-    if (!webhookUrl) return;
-    
-    const https = require('https');
-    const url = new URL(webhookUrl);
-    
-    const payload = JSON.stringify({
-        embeds: [{
-            description: message,
-            color: 0xF5A623,
-            timestamp: new Date().toISOString(),
-            footer: { text: '🐝 Bubblebee' }
-        }]
-    });
-    
-    const req = https.request({
-        hostname: url.hostname,
-        path: url.pathname,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    });
-    req.write(payload);
-    req.end();
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // ERROR HANDLING
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1249,19 +969,10 @@ async function startServer() {
         server.listen(PORT, () => {
             console.log('');
             console.log('═══════════════════════════════════════════════════════════════════════');
-            console.log('  🐝 BUBBLEBEE COMBINED SERVER');
+            console.log('  🐝 BUBBLEBEE SERVER RUNNING');
             console.log('═══════════════════════════════════════════════════════════════════════');
-            console.log(`  Website:    http://localhost:${PORT}`);
-            console.log(`  API:        http://localhost:${PORT}/api`);
-            console.log(`  WebSocket:  ws://localhost:${PORT}/ws`);
-            console.log(`  Health:     http://localhost:${PORT}/api/health`);
-            console.log('');
-            console.log('  Services:');
-            console.log(`    Database: ✅ Connected`);
-            console.log(`    Email:    ${process.env.SMTP_HOST ? '✅ Configured' : '⚠️  Not configured (emails logged to console)'}`);
-            console.log(`    Payments: ${paymentService.isConfigured() ? '✅ Stripe configured' : '⚠️  Not configured'}`);
-            console.log(`    Discord:  ${process.env.DISCORD_WEBHOOK_URL ? '✅ Webhook configured' : '⚠️  Not configured'}`);
-            console.log('');
+            console.log(`  Port: ${PORT}`);
+            console.log('  Email: ✅ Resend configured');
             console.log('═══════════════════════════════════════════════════════════════════════');
             console.log('');
             
