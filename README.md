@@ -49,6 +49,4 @@ The `.env` file is pre-configured with your Gmail SMTP settings. All bookings wi
 
 ## Dashboard Access
 
-Go to http://localhost:3001/dashboard.html
-- Email: admin@bubblebee.com
-- Password: admin123
+redacted
