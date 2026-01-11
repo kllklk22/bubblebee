@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookings | Bubblebee Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+    <div class="admin-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <a href="/" class="sidebar-logo">
+                <div class="sidebar-logo-icon">🐝</div>
+                <span class="sidebar-logo-text">Bubblebee</span>
+            </a>
+            
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-label">Overview</div>
+                    <a href="/admin/dashboard.html" class="nav-link" data-page="dashboard">
+                        <span class="nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-label">Operations</div>
+                    <a href="/admin/bookings.html" class="nav-link active" data-page="bookings">
+                        <span class="nav-icon">📅</span>
+                        <span>Bookings</span>
+                    </a>
+                    <a href="/admin/customers.html" class="nav-link" data-page="customers">
+                        <span class="nav-icon">👥</span>
+                        <span>Customers</span>
+                    </a>
+                    <a href="/admin/schedule.html" class="nav-link" data-page="schedule">
+                        <span class="nav-icon">🗓️</span>
+                        <span>Schedule</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-label">Settings</div>
+                    <a href="/admin/theme.html" class="nav-link" data-page="theme">
+                        <span class="nav-icon">🎨</span>
+                        <span>Site Theme</span>
+                    </a>
+                </div>
+            </nav>
+            
+            <div class="sidebar-user">
+                <div class="sidebar-user-info">
+                    <div class="sidebar-user-avatar" id="user-avatar">A</div>
+                    <div>
+                        <div class="sidebar-user-name" id="user-name">Admin</div>
+                        <div class="sidebar-user-role" id="user-role">Administrator</div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary btn-block" onclick="logout()">Logout</button>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="page-header">
+                <div>
+                    <h1>Bookings</h1>
+                    <p class="page-subtitle">Manage all customer bookings and appointments.</p>
+                </div>
+                <div class="header-actions">
+                    <select id="status-filter" class="form-control" style="padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid #eee;">
+                        <option value="">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+            </header>
+            
+            <div class="card">
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>Customer</th>
+                                    <th>Service</th>
+                                    <th>Date & Time</th>
+                                    <th>Address</th>
+                                    <th>Total</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bookings-table">
+                                <tr>
+                                    <td colspan="7" class="loading">Loading bookings...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Pagination -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
+                <div class="page-info" id="page-info">Showing 0 of 0 bookings</div>
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Booking Detail Modal -->
+    <div class="modal" id="booking-modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <button class="modal-close" onclick="closeModal('booking-modal')">×</button>
+            <h2>Booking Details</h2>
+            <div id="booking-detail">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/admin/admin.js"></script>
+    <script>
+        let currentPage = 0;
+        const limit = 20;
+        
+        document.addEventListener('DOMContentLoaded', async () => {
+            await requireAuth();
+            loadUserInfo();
+            loadBookings();
+            
+            document.getElementById('status-filter').addEventListener('change', () => {
+                currentPage = 0;
+                loadBookings();
+            });
+        });
+        
+        async function loadBookings() {
+            const tbody = document.getElementById('bookings-table');
+            const status = document.getElementById('status-filter').value;
+            
+            try {
+                const params = new URLSearchParams({
+                    limit,
+                    offset: currentPage * limit
+                });
+                if (status) params.append('status', status);
+                
+                const { bookings, total } = await api(`/api/admin/bookings?${params}`);
+                
+                if (bookings.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="7">
+                                <div class="empty-state">
+                                    <div class="empty-icon">📅</div>
+                                    <h3>No bookings found</h3>
+                                    <p>Bookings will appear here when customers schedule services.</p>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                    document.getElementById('page-info').textContent = 'No bookings';
+                    return;
+                }
+                
+                tbody.innerHTML = bookings.map(b => `
+                    <tr>
+                        <td>
+                            <strong>${b.first_name} ${b.last_name}</strong>
+                            <div style="font-size: 0.8rem; color: var(--text-light);">${b.email || ''}</div>
+                        </td>
+                        <td>${b.service_name || 'Cleaning Service'}</td>
+                        <td>
+                            ${formatDate(b.scheduled_date)}
+                            <div style="font-size: 0.8rem; color: var(--text-light);">${formatTime(b.scheduled_time)}</div>
+                        </td>
+                        <td>
+                            <div style="max-width: 200px;">
+                                ${b.address || ''}${b.city ? ', ' + b.city : ''}
+                            </div>
+                        </td>
+                        <td><strong>${formatCurrency(b.total_amount)}</strong></td>
+                        <td><span class="badge badge-${b.status}">${b.status}</span></td>
+                        <td class="actions">
+                            <button class="btn btn-small btn-secondary" onclick="viewBooking('${b.id}')">View</button>
+                            <button class="btn btn-small btn-success" onclick="updateStatus('${b.id}', 'completed')" ${b.status === 'completed' ? 'disabled' : ''}>✓</button>
+                        </td>
+                    </tr>
+                `).join('');
+                
+                const showing = Math.min((currentPage + 1) * limit, total);
+                document.getElementById('page-info').textContent = `Showing ${currentPage * limit + 1}-${showing} of ${total} bookings`;
+                
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="7" class="error">Failed to load bookings</td></tr>`;
+            }
+        }
+        
+        async function viewBooking(id) {
+            openModal('booking-modal');
+            const container = document.getElementById('booking-detail');
+            container.innerHTML = '<div class="loading">Loading...</div>';
+            
+            try {
+                const booking = await api(`/api/admin/bookings/${id}`);
+                
+                container.innerHTML = `
+                    <div style="display: grid; gap: 1.5rem;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Customer</label>
+                                <div style="font-weight: 600;">${booking.first_name} ${booking.last_name}</div>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Status</label>
+                                <div><span class="badge badge-${booking.status}">${booking.status}</span></div>
+                            </div>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Email</label>
+                                <div>${booking.email || 'N/A'}</div>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Phone</label>
+                                <div>${formatPhone(booking.phone) || 'N/A'}</div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label style="font-size: 0.8rem; color: var(--text-light);">Address</label>
+                            <div>${booking.address || ''}, ${booking.city || ''}, ${booking.state || ''} ${booking.zip_code || ''}</div>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Service</label>
+                                <div style="font-weight: 600;">${booking.service_name || 'Cleaning Service'}</div>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Total</label>
+                                <div style="font-weight: 700; font-size: 1.25rem; color: var(--sage-dark);">${formatCurrency(booking.total_amount)}</div>
+                            </div>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Scheduled Date</label>
+                                <div>${formatDate(booking.scheduled_date)}</div>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-light);">Time</label>
+                                <div>${formatTime(booking.scheduled_time) || 'TBD'}</div>
+                            </div>
+                        </div>
+                        
+                        ${booking.notes ? `
+                        <div>
+                            <label style="font-size: 0.8rem; color: var(--text-light);">Notes</label>
+                            <div>${booking.notes}</div>
+                        </div>
+                        ` : ''}
+                        
+                        <div style="display: flex; gap: 0.75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                            <button class="btn btn-success" onclick="updateStatus('${booking.id}', 'completed'); closeModal('booking-modal');" ${booking.status === 'completed' ? 'disabled' : ''}>
+                                Mark Completed
+                            </button>
+                            <button class="btn btn-secondary" onclick="updateStatus('${booking.id}', 'confirmed'); closeModal('booking-modal');" ${booking.status === 'confirmed' ? 'disabled' : ''}>
+                                Confirm
+                            </button>
+                            <button class="btn btn-danger" onclick="updateStatus('${booking.id}', 'cancelled'); closeModal('booking-modal');" ${booking.status === 'cancelled' ? 'disabled' : ''}>
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                `;
+            } catch (err) {
+                container.innerHTML = '<div class="error">Failed to load booking details</div>';
+            }
+        }
+        
+        async function updateStatus(id, status) {
+            try {
+                await api(`/api/admin/bookings/${id}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status })
+                });
+                
+                showToast(`Booking marked as ${status}`);
+                loadBookings();
+            } catch (err) {
+                showToast('Failed to update booking', 'error');
+            }
+        }
+    </script>
+</body>
+</html>
