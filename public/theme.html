@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Site Theme | Bubblebee Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+    <div class="admin-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <a href="/" class="sidebar-logo">
+                <div class="sidebar-logo-icon">🐝</div>
+                <span class="sidebar-logo-text">Bubblebee</span>
+            </a>
+            
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-label">Overview</div>
+                    <a href="/admin/dashboard.html" class="nav-link" data-page="dashboard">
+                        <span class="nav-icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-label">Operations</div>
+                    <a href="/admin/bookings.html" class="nav-link" data-page="bookings">
+                        <span class="nav-icon">📅</span>
+                        <span>Bookings</span>
+                    </a>
+                    <a href="/admin/customers.html" class="nav-link" data-page="customers">
+                        <span class="nav-icon">👥</span>
+                        <span>Customers</span>
+                    </a>
+                    <a href="/admin/schedule.html" class="nav-link" data-page="schedule">
+                        <span class="nav-icon">🗓️</span>
+                        <span>Schedule</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-label">Settings</div>
+                    <a href="/admin/theme.html" class="nav-link active" data-page="theme">
+                        <span class="nav-icon">🎨</span>
+                        <span>Site Theme</span>
+                    </a>
+                </div>
+            </nav>
+            
+            <div class="sidebar-user">
+                <div class="sidebar-user-info">
+                    <div class="sidebar-user-avatar" id="user-avatar">A</div>
+                    <div>
+                        <div class="sidebar-user-name" id="user-name">Admin</div>
+                        <div class="sidebar-user-role" id="user-role">Administrator</div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary btn-block" onclick="logout()">Logout</button>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="page-header">
+                <div>
+                    <h1>Site Theme</h1>
+                    <p class="page-subtitle">Customize the look and feel of your public website.</p>
+                </div>
+                <div class="header-actions">
+                    <a href="/" class="btn btn-secondary" target="_blank">Preview Site →</a>
+                </div>
+            </header>
+            
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Color Theme</h2>
+                </div>
+                <div class="card-body">
+                    <div class="theme-grid">
+                        <!-- Default Theme -->
+                        <label class="theme-card preview-default" data-theme="default">
+                            <div class="theme-preview">
+                                <div class="theme-preview-nav">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <div class="theme-preview-content">
+                                    <div class="theme-preview-title">🐝 Bubblebee</div>
+                                    <div class="theme-preview-btn">Book Now</div>
+                                </div>
+                            </div>
+                            <div class="theme-info">
+                                <h3>Default</h3>
+                                <p>Warm cream with honey & sage accents</p>
+                            </div>
+                        </label>
+                        
+                        <!-- Dark Honey Theme -->
+                        <label class="theme-card preview-dark-honey" data-theme="dark-honey">
+                            <div class="theme-preview">
+                                <div class="theme-preview-nav">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <div class="theme-preview-content">
+                                    <div class="theme-preview-title">🐝 Bubblebee</div>
+                                    <div class="theme-preview-btn">Book Now</div>
+                                </div>
+                            </div>
+                            <div class="theme-info">
+                                <h3>Dark Honey</h3>
+                                <p>Dark background with golden accents</p>
+                            </div>
+                        </label>
+                        
+                        <!-- Ocean Theme -->
+                        <label class="theme-card preview-ocean" data-theme="ocean">
+                            <div class="theme-preview">
+                                <div class="theme-preview-nav">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <div class="theme-preview-content">
+                                    <div class="theme-preview-title">🐝 Bubblebee</div>
+                                    <div class="theme-preview-btn">Book Now</div>
+                                </div>
+                            </div>
+                            <div class="theme-info">
+                                <h3>Ocean</h3>
+                                <p>Deep teal with aqua highlights</p>
+                            </div>
+                        </label>
+                        
+                        <!-- Lavender Theme -->
+                        <label class="theme-card preview-lavender" data-theme="lavender">
+                            <div class="theme-preview">
+                                <div class="theme-preview-nav">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <div class="theme-preview-content">
+                                    <div class="theme-preview-title">🐝 Bubblebee</div>
+                                    <div class="theme-preview-btn">Book Now</div>
+                                </div>
+                            </div>
+                            <div class="theme-info">
+                                <h3>Lavender</h3>
+                                <p>Soft purple with violet accents</p>
+                            </div>
+                        </label>
+                        
+                        <!-- Forest Theme -->
+                        <label class="theme-card preview-forest" data-theme="forest">
+                            <div class="theme-preview">
+                                <div class="theme-preview-nav">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <div class="theme-preview-content">
+                                    <div class="theme-preview-title">🐝 Bubblebee</div>
+                                    <div class="theme-preview-btn">Book Now</div>
+                                </div>
+                            </div>
+                            <div class="theme-info">
+                                <h3>Forest</h3>
+                                <p>Deep green with earthy tones</p>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- Texture Section -->
+                    <div class="texture-section">
+                        <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Texture Overlay</h3>
+                        <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 1rem;">Add a subtle texture to give your site a more tactile feel.</p>
+                        
+                        <div class="texture-grid">
+                            <label class="texture-option" data-texture="none">
+                                <h4>None</h4>
+                                <p>Clean, smooth appearance</p>
+                            </label>
+                            
+                            <label class="texture-option" data-texture="paper">
+                                <h4>Paper</h4>
+                                <p>Subtle paper grain texture</p>
+                            </label>
+                            
+                            <label class="texture-option" data-texture="canvas">
+                                <h4>Canvas</h4>
+                                <p>Woven fabric texture</p>
+                            </label>
+                            
+                            <label class="texture-option" data-texture="grain">
+                                <h4>Film Grain</h4>
+                                <p>Cinematic noise effect</p>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 2rem;">
+                        <button class="btn btn-primary" id="save-btn" onclick="saveTheme()">Save Theme Settings</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="/admin/admin.js"></script>
+    <script>
+        let currentTheme = 'default';
+        let currentTexture = 'none';
+        
+        document.addEventListener('DOMContentLoaded', async () => {
+            await requireAuth();
+            loadUserInfo();
+            loadCurrentSettings();
+            
+            // Theme card clicks
+            document.querySelectorAll('.theme-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
+                    card.classList.add('active');
+                    currentTheme = card.dataset.theme;
+                });
+            });
+            
+            // Texture option clicks
+            document.querySelectorAll('.texture-option').forEach(option => {
+                option.addEventListener('click', () => {
+                    document.querySelectorAll('.texture-option').forEach(o => o.classList.remove('active'));
+                    option.classList.add('active');
+                    currentTexture = option.dataset.texture;
+                });
+            });
+        });
+        
+        async function loadCurrentSettings() {
+            try {
+                const settings = await api('/api/admin/site-settings');
+                currentTheme = settings.theme || 'default';
+                currentTexture = settings.texture || 'none';
+                
+                // Set active states
+                document.querySelector(`.theme-card[data-theme="${currentTheme}"]`)?.classList.add('active');
+                document.querySelector(`.texture-option[data-texture="${currentTexture}"]`)?.classList.add('active');
+            } catch (err) {
+                // Defaults are fine
+                document.querySelector('.theme-card[data-theme="default"]').classList.add('active');
+                document.querySelector('.texture-option[data-texture="none"]').classList.add('active');
+            }
+        }
+        
+        async function saveTheme() {
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            
+            try {
+                await api('/api/admin/site-settings', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        theme: currentTheme,
+                        texture: currentTexture
+                    })
+                });
+                
+                showToast('Theme settings saved! Refresh your site to see changes.');
+            } catch (err) {
+                showToast('Failed to save theme settings', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Save Theme Settings';
+            }
+        }
+    </script>
+</body>
+</html>
